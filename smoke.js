@@ -68,14 +68,13 @@ function run(width) {
   check(`${L}: タイムラインの●が1つ`, doc.querySelectorAll(".tldot").length === 1);
   check(`${L}: ⏱なし枠にチップ1つ`, doc.querySelectorAll(".tlnonechip").length === 1);
 
-  // 達成系：記録数は事実のみ・ストリーク表示・締めボタン
+  // 達成系：記録数は事実のみ・ストリーク表示・ひとことボタン（締めボタンは廃止済み）
   const lite = doc.querySelector(".litecard");
   check(`${L}: 記録数「今日 2件」表示`, lite && lite.textContent.includes("今日 2件 記録できました"));
   check(`${L}: 連続記録の表示`, lite && lite.textContent.includes("連続記録 1日目"));
-  const closeBtn = doc.querySelector("[data-close]");
-  check(`${L}: 「今日はここまで」ボタン`, closeBtn && closeBtn.textContent.includes("今日はここまで"));
   const cheerBtn = doc.querySelector("[data-cheer]");
-  check(`${L}: 途中経過「ひとこと」ボタン`, cheerBtn && cheerBtn.textContent.includes("ひとこと"));
+  check(`${L}: 「担当栄養士からひとこと」ボタン`, cheerBtn && cheerBtn.textContent.includes("担当栄養士からひとこと"));
+  check(`${L}: 締めボタンは存在しない`, !doc.querySelector("[data-close]"));
 
   // 入力プレースホルダの文言
   const ta = doc.querySelector(".mealinput");
@@ -90,9 +89,9 @@ function run(width) {
   check(`${L}: ●タップで品名ポップ`, pop && pop.textContent.includes("テスト定食") && pop.textContent.includes("12:30"));
   check(`${L}: ポップに時刻編集リンク`, !!doc.querySelector("[data-tledit]"));
 
-  // 締めボタン：APIキー未登録なら案内を出す（クラッシュしない）
-  doc.querySelector("[data-close]").dispatchEvent(new window.Event("click", { bubbles: true }));
-  check(`${L}: キー未登録の締めは案内表示`, (doc.querySelector(".errmsg") || {}).textContent?.includes("APIキー"));
+  // ひとことボタン：APIキー未登録なら案内を出す（クラッシュしない）
+  doc.querySelector("[data-cheer]").dispatchEvent(new window.Event("click", { bubbles: true }));
+  check(`${L}: キー未登録のひとことは案内表示`, (doc.querySelector(".errmsg") || {}).textContent?.includes("APIキー"));
 
   // 既存データ互換：移行後もdayType→acts変換・裏の栄養データが温存されている
   const saved = JSON.parse(window.localStorage.getItem("mealoglite:data"));

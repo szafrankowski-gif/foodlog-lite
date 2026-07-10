@@ -1,4 +1,4 @@
-/* foodlog-lite v1.1 — 記録するだけの食事ログPWA（評価も採点もしません）＋PFC目安・途中経過ひとこと｜更新: 2026-07-11 */
+/* foodlog-lite v1.2 — 記録するだけの食事ログPWA（評価も採点もしません）＋PFC目安・担当栄養士のひとこと｜更新: 2026-07-11 */
 "use strict";
 
 // ---- lite: 設定の外部化 ----
@@ -15,7 +15,7 @@ const LITE_CONFIG = {
   showGistSync: false,        // Gist同期UI（コードは残すがUI非表示）
   phase2StartDay: 8,          // 内容褒め解禁日（初記録日を1日目として）
   phase2Manual: null,         // true/falseで手動上書き、nullなら自動
-  commentModel: "claude-haiku-4-5-20251001", // 締めコメント用（品質不足ならSonnetに差し替え）
+  commentModel: "claude-sonnet-4-6", // 担当栄養士のひとこと用（深みある文章重視。コスト最優先ならHaikuへ）
 };
 
 const FLOOR = 100, CEILING = 120;
@@ -155,7 +155,7 @@ function streakInfo(recordedKeys, todayKey) {
   }
   return { current, best };
 }
-// 節目：連続または累計の記録日数が3/7/14/30に達していればその情報を返す（締めコメントで一言祝う用）
+// 節目：連続または累計の記録日数が3/7/14/30に達していればその情報を返す（ひとことコメントで祝う用）
 function milestoneFor(current, total) {
   const MS = [3, 7, 14, 30];
   if (MS.includes(current)) return { type: "連続", days: current };
@@ -414,39 +414,52 @@ ${hint ? "補足メモ：" + hint + "\n" : ""}${NUTRITION_RULES}` },
   return parseItems(raw);
 }
 
-// lite: 応援コメント（人格を全面差し替え）。記録という行為を必ず認める応援係。
-// closing=true は「今日はここまで」の締め、falseは日中の途中経過へのひとこと（締めの総括はしない）。
-// フェーズ1（解禁前）は内容への言及を全面禁止するため、プロンプトに品目リスト自体を渡さない。
-async function fetchCheer(key, closing) {
+// lite: 担当栄養士のひとこと。記録という行為を必ず認めつつ、その日のデータにしか書けない
+// 具体的なコメントを返す（定型褒めの禁止）。直近1週間の記録と時刻のリズムもプロンプトに渡して深みを出す。
+// フェーズ1（解禁前）は食事内容への言及を全面禁止するため、品目名は渡さず時刻・件数・続き方だけを渡す。
+async function fetchCheer(key) {
   const day = getDay(key);
   const rk = recordedKeys();
   const phase = litePhase(rk[0] || key, key, LITE_CONFIG);
   const st = streakInfo(rk, key);
   const total = rk.length;
-  const ms = closing ? milestoneFor(st.current, total) : null; // 節目祝いは締めのときだけ
+  const ms = milestoneFor(st.current, total);
   const [y, m, d] = key.split("-").map(Number);
   const dateLabel = fmtJP(new Date(y, m - 1, d));
-  const foodList = day.foods.map((f) => `${f.t ? f.t + " " : ""}${f.name}`).join("、");
+  const now = new Date();
+  const isToday = toKey(now) === key;
+  const todayList = phase === 2
+    ? day.foods.map((f) => `${f.t ? f.t + " " : ""}${f.name}`).join("、")
+    : day.foods.map((f) => f.t || "時刻なし").join("、");
+  // 直近7日のようす（対象日を除く。フェーズ1は時刻と件数のみ）
+  const recent = [];
+  for (let i = 1; i <= 7; i++) {
+    const k2 = addDaysKey(key, -i);
+    const dd = data[k2];
+    const foods = ((dd || {}).foods) || [];
+    if (!foods.length) continue;
+    const times = foods.map((f) => f.t).filter(Boolean).join("・");
+    const names = phase === 2 ? `｜${foods.map((f) => f.name).slice(0, 6).join("、")}${foods.length > 6 ? " ほか" : ""}` : "";
+    recent.push(`${i}日前：${foods.length}件${times ? `（${times}）` : ""}${names}`);
+  }
   const raw = await callApi({
-    model: LITE_CONFIG.commentModel, max_tokens: 300,
+    model: LITE_CONFIG.commentModel, max_tokens: 400,
     messages: [{ role: "user", content:
-`あなたは記録を応援する係。食事記録アプリのユーザーに一言コメントを返します。以下を厳守。
-- 記録という行為は内容にかかわらず必ず認める（固定給）
-${closing
-  ? "- これは一日の「締め」のコメント。今日の記録をやわらかく締めくくる"
-  : "- これは一日の「途中経過」へのひとこと。締めの総括・「今日も一日おつかれさま」等の締めくくる言葉は禁止。ここまで記録できていることを認め、続きは気楽にでよいと伝わるトーンで"}
-${phase === 2
-  ? "- 良い選択（たんぱく質源／主食+主菜が揃った食事／無糖の飲み物）を見つけたら、その一品だけを理由付きで短く褒める（ボーナス）。1回の返答で褒めは最大2つ"
-  : "- 食べたものの内容への言及は全面禁止。記録という行為だけを具体的に認める（記録の件数や続いた日数に触れるのは可）"}
-- 禁止：悪い選択への言及、比較（昨日より等）、改善提案、数値の言及、健康リスクの話、説教
-${ms ? `- 今日は節目（${ms.type}${ms.days}日目）。それを一言祝う\n` : ""}- 全体トーン：短く、あたたかく、淡々と。絵文字は控えめに1つまで
+`あなたは食事記録アプリの「担当栄養士」。この利用者の記録を毎日見守っている担当者として、ひとことコメントを返します。以下を厳守。
 
-状況：
-- 対象日：${dateLabel}${closing ? "（本人が「今日はここまで」ボタンで一日を締めた）" : "（一日の途中。本人が「ひとこと」ボタンを押した）"}
-- この日の記録：${day.foods.length}件
-- 連続記録：${st.current}日目／累計${total}日
-${phase === 2 ? `- 記録された品目（時刻付き）：${foodList || "（なし）"}\n` : ""}
-出力：日本語で1〜3文のコメントのみ。前置き・見出し・マークダウン不要。`}],
+- 記録という行為は、内容にかかわらず必ず認める（固定給）。ただし「えらい」「すごい」といった定型の褒め言葉の連発は禁止。下のデータから具体的な事実をひとつ拾い、その日の記録にしか書けないコメントにする（例：食事の時刻のリズム、続いている日数、今日の件数や時間帯の特徴${phase === 2 ? "、品目の組み合わせ" : ""}）
+${phase === 2
+  ? "- 良い選択（たんぱく質源／主食+主菜が揃った食事／無糖の飲み物）を見つけたら、その一品だけを「なぜ体にとって良いか」の理由をひとこと添えて褒めてよい（ボーナス）。1回の返答で褒めは最大2つ"
+  : "- 食べたものの内容（品目・栄養）への言及は全面禁止。時刻・件数・続き方など「記録という行為」だけを扱う"}
+- 禁止：悪い選択への言及、責める形の比較、改善の指示や提案、栄養素の数値の言及、健康リスクの話、説教
+${ms ? `- 今日は節目（${ms.type}${ms.days}日目）。それをひとこと祝う\n` : ""}- 長さ：2〜4文。あたたかく、担当者らしい落ち着いたトーン。絵文字は控えめに1つまで
+
+データ：
+- 対象日：${dateLabel}${isToday ? `／現在時刻 ${now.getHours()}:${pad(now.getMinutes())}（一日はまだ途中かもしれない。締めくくらず、決めつけない）` : "（過去の日の振り返り）"}
+- この日の記録：${day.foods.length}件${todayList ? `｜${todayList}` : ""}
+- 連続記録：${st.current}日目／累計${total}日（過去最長${st.best}日）
+${recent.length ? `- 直近1週間のようす：\n${recent.map((r) => "  " + r).join("\n")}\n` : ""}
+出力：コメント本文のみ（日本語で2〜4文）。前置き・見出し・マークダウン不要。`}],
   });
   return raw.trim();
 }
@@ -670,17 +683,15 @@ async function onPhotoPicked(file) {
   finally { busy = false; render(); }
 }
 
-// lite: 応援コメントの取得。closing=true=「今日はここまで」（day.closed=trueを記録）、
-// false=途中経過へのひとこと（closedは変えない）。締めた後の追加記録も普通に可能
-// （記録追加でコメントはクリアされるが、押し直せばまた取得できる）
-async function getCheer(closing) {
+// lite: 担当栄養士のひとことを取得。いつでも・何度でも押せる（記録追加でコメントはクリアされるが、押し直せば再取得）
+async function getCheer() {
   const key = toKey(cursor);
   if (commentBusy || !getDay(key).foods.length) return;
   if (!apiKey()) { errMsg = "APIキーが未登録です。設定タブで登録するとひとことが届きます。"; render(); return; }
   commentBusy = true; errMsg = ""; render();
   try {
-    const c = await fetchCheer(key, closing);
-    updateDay(key, closing ? { comment: c || null, closed: true } : { comment: c || null });
+    const c = await fetchCheer(key);
+    updateDay(key, { comment: c || null });
   } catch (e) { errMsg = "コメントの取得に失敗しました。通信とAPIキーを確認して、もう一度どうぞ。"; }
   finally { commentBusy = false; render(); }
 }
@@ -1028,17 +1039,11 @@ function renderLog() {
       <div class="bakaobox">
         ${day.comment ? `
           <div class="bakaocard">
-            <div class="bakaotitle">${day.closed ? "🌙" : "💬"} ${isToday ? "今日" : "この日"}の${day.closed ? "締め" : "ひとこと"}</div>
+            <div class="bakaotitle">🥗 担当栄養士からひとこと</div>
             <div class="bakaotext">${esc(day.comment)}</div>
-            <div class="cheerlinks">
-              <button class="linkbtn" data-cheer ${commentBusy?"disabled":""}>${commentBusy?"取得中…":"💬 ここまでにひとこと"}</button>
-              <button class="linkbtn" data-close ${commentBusy?"disabled":""}>${commentBusy?"":`🌙 ${day.closed ? "締め直す" : (isToday ? "今日はここまで" : "この日を締める")}`}</button>
-            </div>
+            <button class="linkbtn" data-cheer ${commentBusy?"disabled":""}>${commentBusy?"取得中…":"もう一度きく"}</button>
           </div>` : `
-          <div class="cheerrow">
-            <button class="bakaobtn sub" data-cheer ${commentBusy?"disabled":""}>${commentBusy?'<span class="spin">◐</span>':"💬 ここまでにひとこと"}</button>
-            <button class="bakaobtn" data-close ${commentBusy?"disabled":""}>${commentBusy?'<span class="spin">◐</span>':`🌙 ${isToday ? "今日はここまで" : "この日を締める"}`}</button>
-          </div>`}
+          <button class="bakaobtn" data-cheer ${commentBusy?"disabled":""}>${commentBusy?'<span class="spin">◐</span> 担当栄養士が記録を見ています…':"🥗 担当栄養士からひとこと"}</button>`}
       </div>` : ""}
 
     ${(LITE_CONFIG.showMeasurement || LITE_CONFIG.showSupplements) ? `
@@ -1233,12 +1238,12 @@ function renderSettings() {
   return `
     <div class="section" style="padding-top:4px">
       <div class="card setbox">
-        <div class="settitle">🔑 Anthropic APIキー（AI読み取り・締めの一言用）</div>
+        <div class="settitle">🔑 Anthropic APIキー（AI読み取り・担当栄養士のひとこと用）</div>
         <div class="setdesc">
-          写真やテキストからの品目の読み取りと、「今日はここまで」の一言に使います。キーは<b>この端末の中にだけ</b>保存され、外部には送信されません（Anthropicへの通信を除く）。<br>
+          写真やテキストからの品目の読み取りと、「担当栄養士からひとこと」に使います。キーは<b>この端末の中にだけ</b>保存され、外部には送信されません（Anthropicへの通信を除く）。<br>
           取得：console.anthropic.com → API Keys → Create Key。従量課金ですが1回の読み取りは1円未満〜数円程度です。
         </div>
-        <div style="font-size:12px;margin-bottom:8px;color:${hasKey?"var(--green)":"var(--amber)"}">現在：${hasKey ? "登録済み ✓" : "未登録（AI読み取り・締めの一言は使えません）"}</div>
+        <div style="font-size:12px;margin-bottom:8px;color:${hasKey?"var(--green)":"var(--amber)"}">現在：${hasKey ? "登録済み ✓" : "未登録（AI読み取り・担当栄養士のひとことは使えません）"}</div>
         <input class="setinput mono" id="apikeyInput" type="password" placeholder="sk-ant-..." value="${hasKey ? "●●●●●●●●●●●●" : ""}">
         <div class="setrow">
           <button class="setbtn" data-savekey>保存してテスト</button>
@@ -1332,8 +1337,7 @@ function bindEvents() {
   document.querySelectorAll("[data-ftime]").forEach((b) =>
     b.addEventListener("click", () => editFoodTime(Number(b.dataset.ftime))));
 
-  const cb = $("[data-close]"); if (cb) cb.addEventListener("click", () => getCheer(true));
-  const ch = $("[data-cheer]"); if (ch) ch.addEventListener("click", () => getCheer(false));
+  const ch = $("[data-cheer]"); if (ch) ch.addEventListener("click", getCheer);
 
   document.querySelectorAll("[data-field]").forEach((inp) =>
     inp.addEventListener("change", () => {
