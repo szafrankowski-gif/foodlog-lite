@@ -36,8 +36,8 @@ function run(width) {
     [todayKey]: {
       dayType: "climb",
       foods: [
-        { name: "テスト定食", p: 20, c: 40, t: "12:30" },
-        { name: "のどあめ", p: 0, c: 5 },
+        { name: "テスト定食", p: 20, f: 12, c: 40, t: "12:30" },
+        { name: "のどあめ", p: 0, c: 5 }, // f無しの旧データ互換（F表示は省略される）
       ],
     },
   }));
@@ -54,8 +54,15 @@ function run(width) {
   check(`${L}: 実績トグル非表示`, !doc.querySelector(".daytype"));
   check(`${L}: 食材ペース非表示`, !doc.querySelector(".pacebox"));
   check(`${L}: タイル（睡眠・体重・サプリ）非表示`, !doc.querySelector(".tiles"));
-  check(`${L}: P/C数値非表示`, !doc.querySelector(".foodnums .mono"));
+  check(`${L}: 本体形式の詳細数値は非表示`, !doc.querySelector(".foodnums small"));
   check(`${L}: 品目行は残る（2件）`, doc.querySelectorAll(".foodrow").length === 2);
+
+  // PFC目安（事実表示）：品目行と達成カードの日計
+  const pfcs = [...doc.querySelectorAll(".pfc")].map((e) => e.textContent.trim());
+  check(`${L}: 品目行にPFC目安`, pfcs.length === 2 && pfcs[0] === "P20 F12 C40");
+  check(`${L}: f無しの旧データはF省略`, pfcs[1] === "P0 C5");
+  const pfcLine = doc.querySelector(".litepfc");
+  check(`${L}: 日計のPFC目安`, pfcLine && pfcLine.textContent.includes("P 20・F 12・C 45"));
 
   // タイムライン：時刻あり1件が●、時刻なし1件が⏱なし枠
   check(`${L}: タイムラインの●が1つ`, doc.querySelectorAll(".tldot").length === 1);
@@ -67,6 +74,8 @@ function run(width) {
   check(`${L}: 連続記録の表示`, lite && lite.textContent.includes("連続記録 1日目"));
   const closeBtn = doc.querySelector("[data-close]");
   check(`${L}: 「今日はここまで」ボタン`, closeBtn && closeBtn.textContent.includes("今日はここまで"));
+  const cheerBtn = doc.querySelector("[data-cheer]");
+  check(`${L}: 途中経過「ひとこと」ボタン`, cheerBtn && cheerBtn.textContent.includes("ひとこと"));
 
   // 入力プレースホルダの文言
   const ta = doc.querySelector(".mealinput");

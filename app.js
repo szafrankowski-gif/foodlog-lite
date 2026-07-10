@@ -1,10 +1,11 @@
-/* foodlog-lite v1 — 記録するだけの食事ログPWA（評価も採点もしません）｜更新: 2026-07-11 */
+/* foodlog-lite v1.1 — 記録するだけの食事ログPWA（評価も採点もしません）＋PFC目安・途中経過ひとこと｜更新: 2026-07-11 */
 "use strict";
 
 // ---- lite: 設定の外部化 ----
 // 機能の表示/非表示と文言はここに集約。全フラグtrueで本体foodlog相当の挙動になる（本体P3への逆輸入を想定した作り）。
 const LITE_CONFIG = {
-  showNutrientNumbers: false, // P/C数値の表示（データは裏で保存し続ける）。振り返りタブもこれに連動
+  showNutrientNumbers: false, // 本体互換のP/C詳細表示（達成色・振り返りタブもこれに連動）
+  showPFC: true,              // lite: PFCの概算を「事実」として表示（目標比較・達成色・警告はしない）
   showGauges: false,          // たんぱく質・糖質ゲージ（緑黄・魚・繊維ピルも評価系なので連動）
   showPaceTable: false,       // 食材ペース
   showActs: false,            // 実績トグル（筋トレメニュー・メモもこれに連動）
@@ -181,6 +182,7 @@ const fmtJP = (d) => `${d.getMonth() + 1}/${d.getDate()}（${"日月火水木金
 const emptyDay = () => ({ foods: [], acts: [], sleep: null, weight: null, comment: null });
 const sumP = (dd) => (dd && dd.foods || []).reduce((s, f) => s + (Number(f.p) || 0), 0);
 const sumC = (dd) => (dd && dd.foods || []).reduce((s, f) => s + (Number(f.c) || 0), 0);
+const sumF = (dd) => (dd && dd.foods || []).reduce((s, f) => s + (Number(f.f) || 0), 0); // lite: 脂質（旧データはf無し=0扱い）
 const getDay = (k) => data[k] || emptyDay();
 // lite: 1件以上記録がある日付キーの昇順配列（ストリーク・フェーズ判定・初記録日の算出に使う）
 const recordedKeys = () => Object.keys(data).filter((k) => (((data[k] || {}).foods) || []).length > 0).sort();
@@ -347,14 +349,15 @@ function weightAvg7(anchor) {
 // ---------- Anthropic API ----------
 const NUTRITION_RULES = `各品目について次を判定：
 - p: たんぱく質g(整数)
+- f: 脂質g(整数)
 - c: 糖質(炭水化物)g(整数)
 - veg: 緑黄色野菜か(にんじん/トマト/かぼちゃ/ほうれん草/小松菜/ブロッコリー/オクラ/ピーマン等ならtrue)
 - omega3: オメガ3が豊富な魚か(鯖/いわし/あじ/鮭/さんま等の青魚・鮭ならtrue。ツナ・白身魚はfalse)
 - fiber: 食物繊維が豊富か(海藻/きのこ/豆類/野菜/全粒穀物/玄米等ならtrue)
 - cat: 食材カテゴリ。鯖の缶詰なら"saba"、それ以外の魚(鮭/いわし/あじ/さんま/白身魚/生魚/焼き魚、および鯖の生・焼き)なら"fish"、ツナ缶なら"tuna"、牛・ラム等の赤身肉(焼肉/ステーキ/牛丼含む)なら"red"、貝類(あさり/牡蠣/しじみ/ホタテ等)なら"shell"、鶏レバー・レバー(焼き鳥のレバー串含む)なら"liver"、いずれでもなければ""(空文字)
 - t: 食べた時刻。本文に時刻の記載があれば"HH:MM"形式（例：「21時に」→"21:00"、「昼12時半」→"12:30"）。記載がなければnull
-ユーザーがたんぱく質や糖質のg数を明記していた場合はその値を優先すること。
-出力はJSON配列のみ。各要素は {"name":品名,"p":int,"c":int,"veg":bool,"omega3":bool,"fiber":bool,"cat":string,"t":文字列orNull}。
+ユーザーがたんぱく質・脂質・糖質のg数を明記していた場合はその値を優先すること。
+出力はJSON配列のみ。各要素は {"name":品名,"p":int,"f":int,"c":int,"veg":bool,"omega3":bool,"fiber":bool,"cat":string,"t":文字列orNull}。
 前置き・説明・コードフェンス・マークダウンは一切不要。`;
 
 async function callApi(body) {
@@ -378,7 +381,7 @@ async function callApi(body) {
 function parseItems(raw) {
   const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
   return parsed.filter((x) => x && x.name).map((x) => {
-    const it = { name: String(x.name), p: Math.max(0, Math.round(Number(x.p) || 0)), c: Math.max(0, Math.round(Number(x.c) || 0)) };
+    const it = { name: String(x.name), p: Math.max(0, Math.round(Number(x.p) || 0)), f: Math.max(0, Math.round(Number(x.f) || 0)), c: Math.max(0, Math.round(Number(x.c) || 0)) };
     if (x.veg) it.veg = true;
     if (x.omega3) it.omega3 = true;
     if (x.fiber) it.fiber = true;
@@ -411,7 +414,8 @@ ${hint ? "補足メモ：" + hint + "\n" : ""}${NUTRITION_RULES}` },
   return parseItems(raw);
 }
 
-// lite: 締めコメント（人格を全面差し替え）。記録という行為を必ず認める応援係。
+// lite: 応援コメント（人格を全面差し替え）。記録という行為を必ず認める応援係。
+// closing=true は「今日はここまで」の締め、falseは日中の途中経過へのひとこと（締めの総括はしない）。
 // フェーズ1（解禁前）は内容への言及を全面禁止するため、プロンプトに品目リスト自体を渡さない。
 async function fetchCheer(key, closing) {
   const day = getDay(key);
@@ -419,15 +423,18 @@ async function fetchCheer(key, closing) {
   const phase = litePhase(rk[0] || key, key, LITE_CONFIG);
   const st = streakInfo(rk, key);
   const total = rk.length;
-  const ms = milestoneFor(st.current, total);
+  const ms = closing ? milestoneFor(st.current, total) : null; // 節目祝いは締めのときだけ
   const [y, m, d] = key.split("-").map(Number);
   const dateLabel = fmtJP(new Date(y, m - 1, d));
   const foodList = day.foods.map((f) => `${f.t ? f.t + " " : ""}${f.name}`).join("、");
   const raw = await callApi({
     model: LITE_CONFIG.commentModel, max_tokens: 300,
     messages: [{ role: "user", content:
-`あなたは記録を応援する係。食事記録アプリのユーザーの「今日の締め」に一言コメントを返します。以下を厳守。
+`あなたは記録を応援する係。食事記録アプリのユーザーに一言コメントを返します。以下を厳守。
 - 記録という行為は内容にかかわらず必ず認める（固定給）
+${closing
+  ? "- これは一日の「締め」のコメント。今日の記録をやわらかく締めくくる"
+  : "- これは一日の「途中経過」へのひとこと。締めの総括・「今日も一日おつかれさま」等の締めくくる言葉は禁止。ここまで記録できていることを認め、続きは気楽にでよいと伝わるトーンで"}
 ${phase === 2
   ? "- 良い選択（たんぱく質源／主食+主菜が揃った食事／無糖の飲み物）を見つけたら、その一品だけを理由付きで短く褒める（ボーナス）。1回の返答で褒めは最大2つ"
   : "- 食べたものの内容への言及は全面禁止。記録という行為だけを具体的に認める（記録の件数や続いた日数に触れるのは可）"}
@@ -435,7 +442,7 @@ ${phase === 2
 ${ms ? `- 今日は節目（${ms.type}${ms.days}日目）。それを一言祝う\n` : ""}- 全体トーン：短く、あたたかく、淡々と。絵文字は控えめに1つまで
 
 状況：
-- 対象日：${dateLabel}${closing ? "（本人が「今日はここまで」ボタンで一日を締めた）" : ""}
+- 対象日：${dateLabel}${closing ? "（本人が「今日はここまで」ボタンで一日を締めた）" : "（一日の途中。本人が「ひとこと」ボタンを押した）"}
 - この日の記録：${day.foods.length}件
 - 連続記録：${st.current}日目／累計${total}日
 ${phase === 2 ? `- 記録された品目（時刻付き）：${foodList || "（なし）"}\n` : ""}
@@ -663,16 +670,17 @@ async function onPhotoPicked(file) {
   finally { busy = false; render(); }
 }
 
-// lite: 「今日はここまで」＝日次の締め。祝いの一言を取得して表示し、day.closed=trueを記録。
-// 締めた後の追加記録も普通に可能（記録追加でコメントはクリアされるが、締め直しでまた取得できる）
-async function closeDay() {
+// lite: 応援コメントの取得。closing=true=「今日はここまで」（day.closed=trueを記録）、
+// false=途中経過へのひとこと（closedは変えない）。締めた後の追加記録も普通に可能
+// （記録追加でコメントはクリアされるが、押し直せばまた取得できる）
+async function getCheer(closing) {
   const key = toKey(cursor);
   if (commentBusy || !getDay(key).foods.length) return;
-  if (!apiKey()) { errMsg = "APIキーが未登録です。設定タブで登録すると締めの一言が届きます。"; render(); return; }
+  if (!apiKey()) { errMsg = "APIキーが未登録です。設定タブで登録するとひとことが届きます。"; render(); return; }
   commentBusy = true; errMsg = ""; render();
   try {
-    const c = await fetchCheer(key, true);
-    updateDay(key, { comment: c || null, closed: true });
+    const c = await fetchCheer(key, closing);
+    updateDay(key, closing ? { comment: c || null, closed: true } : { comment: c || null });
   } catch (e) { errMsg = "コメントの取得に失敗しました。通信とAPIキーを確認して、もう一度どうぞ。"; }
   finally { commentBusy = false; render(); }
 }
@@ -833,6 +841,7 @@ function renderAchievement(day, isToday) {
     <div class="card litecard">
       <div class="litecount">${nLabel}</div>
       <div class="litestreak">${stLabel}</div>
+      ${(LITE_CONFIG.showPFC && n > 0) ? `<div class="litepfc">きょうのめやす <span class="mono">P ${sumP(day)}・F ${sumF(day)}・C ${sumC(day)} g</span> <span class="stbest">（AIのおおまかな概算です）</span></div>` : ""}
     </div>`;
 }
 
@@ -994,7 +1003,7 @@ function renderLog() {
       <textarea class="mealinput" rows="2" placeholder="飲み物・あめ・つまみ食いも、なんでも1枚 or 一言で" ${busy?"disabled":""}>${esc(inputText)}</textarea>
       <button class="sendbtn" data-send ${busy?"disabled":""}>${busy?'<span class="spin">◐</span>':"⏎"}</button>
     </div>
-    <div class="hint">${busy ? "読み取り中…" : apiKey() ? (LITE_CONFIG.showNutrientNumbers ? "AIが自動概算します。g数を書けばその値を優先。" : "AIが品名と時刻を読み取って記録します。") : "AI読み取りには設定タブでAPIキー登録が必要です。"}</div>
+    <div class="hint">${busy ? "読み取り中…" : apiKey() ? (LITE_CONFIG.showNutrientNumbers ? "AIが自動概算します。g数を書けばその値を優先。" : LITE_CONFIG.showPFC ? "AIが品名・時刻とPFCのめやすを読み取って記録します。" : "AIが品名と時刻を読み取って記録します。") : "AI読み取りには設定タブでAPIキー登録が必要です。"}</div>
     ${errMsg ? `<div class="errmsg">${esc(errMsg)}</div>` : ""}
 
     <div class="foodlist">
@@ -1005,9 +1014,11 @@ function renderLog() {
             <button class="timechip mono" data-ftime="${i}" title="タップで時刻を修正">${f.t ? esc(f.t) : "--:--"}</button>
             <div class="foodname"><span class="nm">${esc(f.name)}</span><span class="badges">${LITE_CONFIG.showGauges ? `${f.veg?"🥬":""}${f.omega3?"🐟":""}${f.fiber?"🌾":""}` : ""}</span></div>
             <div class="foodnums">
-              ${!LITE_CONFIG.showNutrientNumbers ? "" : `
+              ${LITE_CONFIG.showNutrientNumbers ? `
               <span class="mono" style="color:var(--ice);font-size:15px">${f.p}<small style="color:var(--muted)">P</small></span>
-              <span class="mono" style="color:var(--muted);font-size:13px">${f.c ?? 0}<small>C</small></span>`}
+              <span class="mono" style="color:var(--muted);font-size:13px">${f.c ?? 0}<small>C</small></span>`
+              : LITE_CONFIG.showPFC ? `
+              <span class="pfc mono">P${f.p ?? 0}${f.f != null ? ` F${f.f}` : ""} C${f.c ?? 0}</span>` : ""}
               <button class="delbtn" data-del="${i}">🗑</button>
             </div>
           </div>`).join("")}
@@ -1017,11 +1028,17 @@ function renderLog() {
       <div class="bakaobox">
         ${day.comment ? `
           <div class="bakaocard">
-            <div class="bakaotitle">🌙 ${isToday ? "今日" : "この日"}の締め</div>
+            <div class="bakaotitle">${day.closed ? "🌙" : "💬"} ${isToday ? "今日" : "この日"}の${day.closed ? "締め" : "ひとこと"}</div>
             <div class="bakaotext">${esc(day.comment)}</div>
-            <button class="linkbtn" data-close>${commentBusy?"取得中…":"締め直す"}</button>
+            <div class="cheerlinks">
+              <button class="linkbtn" data-cheer ${commentBusy?"disabled":""}>${commentBusy?"取得中…":"💬 ここまでにひとこと"}</button>
+              <button class="linkbtn" data-close ${commentBusy?"disabled":""}>${commentBusy?"":`🌙 ${day.closed ? "締め直す" : (isToday ? "今日はここまで" : "この日を締める")}`}</button>
+            </div>
           </div>` : `
-          <button class="bakaobtn" data-close ${commentBusy?"disabled":""}>${commentBusy?'<span class="spin">◐</span> 一言を用意しています…':`🌙 ${isToday ? "今日はここまで" : "この日を締める"}`}</button>`}
+          <div class="cheerrow">
+            <button class="bakaobtn sub" data-cheer ${commentBusy?"disabled":""}>${commentBusy?'<span class="spin">◐</span>':"💬 ここまでにひとこと"}</button>
+            <button class="bakaobtn" data-close ${commentBusy?"disabled":""}>${commentBusy?'<span class="spin">◐</span>':`🌙 ${isToday ? "今日はここまで" : "この日を締める"}`}</button>
+          </div>`}
       </div>` : ""}
 
     ${(LITE_CONFIG.showMeasurement || LITE_CONFIG.showSupplements) ? `
@@ -1315,7 +1332,8 @@ function bindEvents() {
   document.querySelectorAll("[data-ftime]").forEach((b) =>
     b.addEventListener("click", () => editFoodTime(Number(b.dataset.ftime))));
 
-  const cb = $("[data-close]"); if (cb) cb.addEventListener("click", closeDay);
+  const cb = $("[data-close]"); if (cb) cb.addEventListener("click", () => getCheer(true));
+  const ch = $("[data-cheer]"); if (ch) ch.addEventListener("click", () => getCheer(false));
 
   document.querySelectorAll("[data-field]").forEach((inp) =>
     inp.addEventListener("change", () => {
