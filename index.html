@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E141A">
+<title>foodlog</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root {
+    --bg:#0E141A; --surface:#19222C; --surface2:#22303C; --line:#2E3E4C;
+    --ice:#5FC9DE; --amber:#F0B458; --text:#E9EEF2; --muted:#8598A6;
+    --green:#7FD68B; --violet:#9D8CE0; --red:#E08C8C;
+    --r-s:6px; --r-m:10px; --r-l:12px; /* 角丸トークン：小=チップ/バー・中=設定系・大=カード/ボタン */
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Hiragino Sans',sans-serif;
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  #app { max-width:480px; margin:0 auto; padding:0 0 48px; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  button { font-family:inherit; }
+  input, textarea { font-family:inherit; color:var(--text); }
+  input::placeholder, textarea::placeholder { color:var(--muted); opacity:.7; }
+
+  .tabs { display:flex; gap:6px; padding:14px 16px 8px; }
+  .tab {
+    flex:1; padding:9px 0; border-radius:var(--r-m); font-size:14px; font-weight:700;
+    border:1px solid var(--line); background:transparent; color:var(--muted); cursor:pointer;
+  }
+  .tab.on { border-color:var(--ice); background:rgba(95,201,222,.14); color:var(--ice); }
+
+  .datenav { display:flex; align-items:center; justify-content:space-between; padding:4px 16px 10px; }
+  .navbtn {
+    background:var(--surface); border:1px solid var(--line); color:var(--text);
+    width:38px; height:38px; border-radius:var(--r-l); font-size:18px; cursor:pointer;
+  }
+  .navbtn:disabled { opacity:.25; }
+  .datetitle { font-size:19px; font-weight:700; letter-spacing:.5px; text-align:center; }
+  .todaybtn { background:none; border:none; color:var(--ice); font-size:12px; margin-top:2px; cursor:pointer; display:block; width:100%; }
+
+  .daytype { display:flex; gap:8px; padding:2px 16px 14px; }
+  .dt {
+    flex:1; padding:10px 0; border-radius:var(--r-l); font-size:13px; font-weight:600;
+    border:1px solid var(--line); background:transparent; color:var(--muted); cursor:pointer;
+  }
+  .dt.rest.on { border-color:var(--ice); background:rgba(95,201,222,.12); color:var(--ice); }
+  .dt.active.on { border-color:var(--amber); background:rgba(240,180,88,.14); color:var(--amber); }
+  /* 有酸素は糖質目標に影響しない実績なので、運動日(amber)と点灯色を分ける */
+  .dt.aero.on { border-color:var(--ice); background:rgba(95,201,222,.12); color:var(--ice); }
+  .daytype6 { flex-wrap:wrap; }
+  .daytype6 .dt { flex:1 1 28%; padding:9px 0; font-size:12px; }
+
+  .gaugewrap { display:flex; gap:16px; padding:0 16px 8px; }
+  .gauge { position:relative; width:52px; height:224px; flex-shrink:0; }
+  .gauge .tube { position:absolute; inset:0; border-radius:14px; background:var(--surface); border:1px solid var(--line); overflow:hidden; }
+  .gauge .fill { position:absolute; left:0; right:0; bottom:0; transition:height .5s cubic-bezier(.22,1,.36,1); }
+  .gauge .floorline { position:absolute; left:-4px; right:-4px; border-top:2px dashed var(--green); opacity:.9; }
+  .gauge .ceilline { position:absolute; left:-4px; right:-4px; top:0; border-top:2px solid var(--amber); opacity:.9; }
+  .gmain { flex:1; display:flex; flex-direction:column; justify-content:center; }
+  .glabel { font-size:11px; color:var(--muted); letter-spacing:1px; font-weight:700; margin-bottom:2px; }
+  .gnum { font-size:48px; font-weight:700; line-height:1; }
+  .gunit { font-size:18px; color:var(--muted); }
+  .gtarget { color:var(--muted); font-size:13px; margin-top:5px; }
+  .statusrow { display:flex; align-items:center; gap:8px; margin-top:7px; font-size:13px; }
+  .statusrow .detail { margin-left:auto; font-size:12px; }
+  .weekavg { margin-top:12px; font-size:12px; color:var(--muted); }
+
+  /* 達成チェック（緑地に✓）の共通部品。lg=筋トレメニュー用 */
+  .box {
+    width:16px; height:16px; border-radius:var(--r-s); flex-shrink:0; border:1.5px solid var(--green);
+    display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:900;
+  }
+  .box.lg { width:18px; height:18px; font-size:12px; }
+  .box.on { background:var(--green); color:var(--bg); }
+
+  /* 進捗横バー（糖質など）。fillのwidth/backgroundは呼び出し側が動的指定 */
+  .hbar { flex:1; height:10px; border-radius:var(--r-s); background:var(--surface2); overflow:hidden; }
+  .hbar .fill { height:100%; border-radius:inherit; transition:width .5s cubic-bezier(.22,1,.36,1); }
+
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-l); }
+  .carbcard { margin:8px 16px 0; padding:12px 14px; }
+  .carbcard.hot { border-color:var(--amber); }
+
+  .pills { display:flex; gap:8px; padding:12px 16px 0; }
+  .pill {
+    flex:1; border-radius:var(--r-l); padding:10px 4px; display:flex; flex-direction:column; align-items:center; gap:4px;
+    border:1px solid var(--line); background:var(--surface); font-size:11px; color:var(--muted); font-weight:600;
+  }
+  .pill.on { border-color:var(--green); background:rgba(127,214,139,.12); color:var(--green); }
+  .pill .ico { font-size:15px; }
+
+  .section { padding:16px 16px 0; }
+  .seclabel { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:11px; letter-spacing:1.5px; font-weight:700; }
+  .pacebox { padding:4px 14px; margin-top:10px; }
+  .pacerow { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
+  .pacerow:last-child { border-bottom:none; }
+  .pacename { font-size:14px; width:96px; flex-shrink:0; }
+  .dots { display:flex; gap:4px; flex:1; }
+  .dot { width:9px; height:9px; border-radius:50%; border:1.5px solid var(--line); }
+  .pacestat { font-size:12px; flex-shrink:0; color:var(--muted); }
+  .pacestat.met { color:var(--green); }
+  .pacenote { font-size:11px; color:var(--muted); margin-top:6px; }
+
+  .inputrow { display:flex; gap:8px; align-items:flex-end; padding:16px 16px 0; }
+  .iconbtn {
+    background:var(--surface2); border:1px solid var(--line); color:var(--ice);
+    border-radius:var(--r-l); width:48px; height:48px; font-size:19px; cursor:pointer; flex-shrink:0;
+  }
+  .iconbtn:disabled { color:var(--muted); }
+  textarea.mealinput {
+    flex:1; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-l);
+    padding:12px 14px; font-size:15px; outline:none; resize:none; line-height:1.5; min-width:0;
+  }
+  .sendbtn {
+    background:var(--ice); border:none; color:var(--bg); border-radius:var(--r-l);
+    width:48px; height:48px; font-size:19px; cursor:pointer; flex-shrink:0;
+  }
+  .sendbtn:disabled { background:var(--surface2); color:var(--muted); }
+  .hint { font-size:11px; color:var(--muted); margin:6px 16px 0; }
+  .errmsg { font-size:12px; color:var(--amber); margin:6px 16px 0; }
+
+  .foodlist { padding:8px 16px 0; }
+  .foodrow { display:flex; align-items:center; justify-content:space-between; padding:11px 2px; border-bottom:1px solid var(--line); }
+  .foodname { flex:1; font-size:15px; display:flex; align-items:center; gap:7px; min-width:0; }
+  .foodname span.nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .timechip {
+    background:none; border:1px solid var(--line); border-radius:var(--r-s); color:var(--muted);
+    font-size:11px; padding:2px 5px; margin-right:8px; flex-shrink:0; cursor:pointer; min-width:44px;
+  }
+  .badges { font-size:11px; flex-shrink:0; letter-spacing:1px; }
+  .foodnums { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+  .delbtn { background:none; border:none; color:var(--muted); font-size:15px; cursor:pointer; padding:4px; }
+  .emptymsg { color:var(--muted); font-size:13px; text-align:center; padding:18px 0; }
+
+  .bakaobox { margin:10px 16px 0; }
+  .bakaocard { background:rgba(127,214,139,.08); border:1px solid var(--line); border-radius:var(--r-l); padding:12px 14px; }
+  .bakaotitle { font-size:11px; color:var(--green); font-weight:700; margin-bottom:6px; }
+  .bakaotext { font-size:13.5px; line-height:1.7; }
+  .bakaobtn {
+    width:100%; background:var(--surface); border:1px solid var(--line); color:var(--green);
+    border-radius:var(--r-l); padding:12px 0; font-size:13px; font-weight:600; cursor:pointer;
+  }
+  .bakaobtn:disabled { color:var(--muted); }
+  .linkbtn { background:none; border:none; color:var(--muted); font-size:11px; margin-top:8px; cursor:pointer; padding:0; }
+
+  .tiles { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; padding:12px 16px 0; }
+  .tile {
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--r-l);
+    padding:12px 2px; display:flex; flex-direction:column; align-items:center; gap:6px; min-width:0;
+  }
+  .tile.on { border-color:var(--green); background:rgba(127,214,139,.12); }
+  button.tile { cursor:pointer; }
+  .tile .ico { font-size:16px; }
+  .tileinput {
+    width:100%; text-align:center; background:transparent; border:none; font-size:17px;
+    font-weight:700; outline:none; min-width:0;
+  }
+  .tilelabel { font-size:11px; color:var(--muted); }
+  .walknote { font-size:11px; color:var(--green); margin:8px 16px 0; }
+
+  .rangebtns { display:flex; gap:6px; align-items:center; padding:2px 16px 14px; }
+  .rbtn { padding:6px 14px; border-radius:8px; font-size:12px; font-weight:600; border:1px solid var(--line); background:transparent; color:var(--muted); cursor:pointer; }
+  .rbtn.on { border-color:var(--ice); background:rgba(95,201,222,.12); color:var(--ice); }
+  .csvbtn { margin-left:auto; padding:6px 12px; border-radius:8px; font-size:12px; font-weight:600; border:1px solid var(--line); background:transparent; color:var(--muted); cursor:pointer; }
+
+  .sumgrid { display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:0 16px 18px; }
+  .sumcard { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-l); padding:12px 14px; }
+  .sumlabel { font-size:11px; color:var(--muted); }
+  .sumval { font-size:26px; font-weight:700; margin-top:4px; }
+  .sumunit { font-size:12px; color:var(--muted); }
+  .sumnote { font-size:10px; color:var(--muted); margin-top:2px; }
+
+  .chartbox { padding:0 16px 20px; }
+  .chartnote { font-size:11px; color:var(--muted); margin-top:4px; }
+  svg text { font-family:ui-monospace,monospace; }
+
+  .daylist { padding:0 16px; }
+  .dayrow { display:flex; align-items:center; gap:10px; padding:10px 2px; border-bottom:1px solid var(--line); font-size:13px; }
+  .dayrow.off { opacity:.4; }
+  .daydate { width:48px; flex-shrink:0; color:var(--muted); }
+  .daybadge { font-size:9px; color:var(--amber); border:1px solid var(--amber); border-radius:4px; padding:1px 4px; flex-shrink:0; }
+  .dayicons { display:flex; gap:3px; flex-shrink:0; font-size:11px; }
+  .dayp { margin-left:auto; font-size:15px; flex-shrink:0; }
+
+  .setbox { margin:0 16px 14px; padding:14px; }
+  .settitle { font-size:13px; font-weight:700; margin-bottom:8px; }
+  .setdesc { font-size:12px; color:var(--muted); line-height:1.7; margin-bottom:10px; }
+  .setinput {
+    width:100%; background:var(--bg); border:1px solid var(--line); border-radius:var(--r-m);
+    padding:11px 12px; font-size:14px; outline:none;
+  }
+  .setbtn {
+    background:var(--ice); border:none; color:var(--bg); border-radius:var(--r-m);
+    padding:10px 16px; font-size:13px; font-weight:700; cursor:pointer; margin-top:10px;
+  }
+  .setbtn.ghost { background:transparent; border:1px solid var(--line); color:var(--text); }
+  .setbtn.danger { background:transparent; border:1px solid var(--red); color:var(--red); }
+  .setrow { display:flex; gap:8px; flex-wrap:wrap; }
+  .okmsg { font-size:12px; color:var(--green); margin-top:8px; }
+  .spin { display:inline-block; animation:sp 1s linear infinite; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+
+  /* ---- 大画面（900px〜）: 記録+振り返りの2カラムダッシュボード ---- */
+  @media (min-width: 900px) {
+    #app { max-width: 1060px; padding: 0 12px 48px; }
+    .wide-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; align-items: start; }
+    .wide-grid > .wcol { min-width: 0; }
+    .wide-grid > .wcol.sub { border-left: 1px solid var(--line); }
+    .wide-single { max-width: 540px; margin: 0 auto; }
+    .tabs { max-width: 540px; margin: 0 auto; }
+    .gnum { font-size: 56px; }
+    .sumgrid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<input type="file" id="photoInput" accept="image/*" style="display:none">
+<input type="file" id="importInput" accept="application/json" style="display:none">
+<script src="app.js"></script>
+</body>
+</html>

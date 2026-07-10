@@ -1,0 +1,13 @@
+{
+  "name": "foodlog",
+  "short_name": "foodlog",
+  "description": "たんぱく質 基準100g/運動日目標120g方式の食事ログ",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0E141A",
+  "theme_color": "#0E141A",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
