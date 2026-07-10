@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0E141A">
-<title>foodlog</title>
+<title>foodlog-lite</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
 <style>
@@ -185,6 +185,38 @@
   .daybadge { font-size:9px; color:var(--amber); border:1px solid var(--amber); border-radius:4px; padding:1px 4px; flex-shrink:0; }
   .dayicons { display:flex; gap:3px; flex-shrink:0; font-size:11px; }
   .dayp { margin-left:auto; font-size:15px; flex-shrink:0; }
+
+  /* ---- lite: タイムライン（この版の主役UI。●は単色・評価の色分けはしない） ---- */
+  .tlcard { margin-top:10px; padding:14px 14px 6px; }
+  .tlrow { display:flex; align-items:flex-start; gap:10px; }
+  .tlbar { position:relative; flex:1; height:14px; margin:5px 4px 26px; border-radius:var(--r-s); background:var(--surface2); }
+  .tltick { position:absolute; top:19px; transform:translateX(-50%); font-size:9px; color:var(--muted); white-space:nowrap; }
+  .tltick i { display:block; position:absolute; top:-6px; left:50%; height:5px; border-left:1px solid var(--line); }
+  .tldot {
+    position:absolute; top:50%; transform:translate(-50%,-50%);
+    width:13px; height:13px; border-radius:50%; background:var(--ice);
+    border:2px solid var(--bg); padding:0; cursor:pointer;
+  }
+  .tldot.sel { outline:2px solid var(--text); }
+  .tlnonebox {
+    flex-shrink:0; max-width:38%; display:flex; align-items:center; gap:4px; flex-wrap:wrap;
+    border:1px dashed var(--line); border-radius:var(--r-m); padding:4px 6px;
+    font-size:10px; color:var(--muted);
+  }
+  .tlnonechip {
+    border:none; background:var(--surface2); border-radius:var(--r-s); color:var(--text);
+    font-size:10px; padding:2px 6px; cursor:pointer;
+    max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .tlnonechip.sel { outline:1.5px solid var(--text); }
+  .tlempty { font-size:12px; color:var(--muted); padding:0 0 8px; }
+  .tlpop { font-size:13px; padding:6px 0 8px; border-top:1px solid var(--line); display:flex; align-items:center; gap:8px; }
+
+  /* ---- lite: 達成カード（罰感ゼロ：赤・警告色は使わない） ---- */
+  .litecard { margin:12px 16px 0; padding:12px 14px; }
+  .litecount { font-size:15px; font-weight:700; }
+  .litestreak { font-size:12px; color:var(--muted); margin-top:4px; }
+  .stbest { color:var(--muted); font-weight:400; }
 
   .setbox { margin:0 16px 14px; padding:14px; }
   .settitle { font-size:13px; font-weight:700; margin-bottom:8px; }

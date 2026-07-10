@@ -1,18 +1,35 @@
-/* foodlog v2 — 食事ログPWA（実績ベース判定・歩数参考表示）｜更新: 2026-07-09 */
+/* foodlog-lite v1 — 記録するだけの食事ログPWA（評価も採点もしません）｜更新: 2026-07-11 */
 "use strict";
 
+// ---- lite: 設定の外部化 ----
+// 機能の表示/非表示と文言はここに集約。全フラグtrueで本体foodlog相当の挙動になる（本体P3への逆輸入を想定した作り）。
+const LITE_CONFIG = {
+  showNutrientNumbers: false, // P/C数値の表示（データは裏で保存し続ける）。振り返りタブもこれに連動
+  showGauges: false,          // たんぱく質・糖質ゲージ（緑黄・魚・繊維ピルも評価系なので連動）
+  showPaceTable: false,       // 食材ペース
+  showActs: false,            // 実績トグル（筋トレメニュー・メモもこれに連動）
+  showSupplements: false,     // サプリタイル
+  showWrist: false,           // 手首チェック
+  showMeasurement: false,     // 📊測定データ（睡眠・体重タイル・体調メモも連動）
+  showGistSync: false,        // Gist同期UI（コードは残すがUI非表示）
+  phase2StartDay: 8,          // 内容褒め解禁日（初記録日を1日目として）
+  phase2Manual: null,         // true/falseで手動上書き、nullなら自動
+  commentModel: "claude-haiku-4-5-20251001", // 締めコメント用（品質不足ならSonnetに差し替え）
+};
+
 const FLOOR = 100, CEILING = 120;
-const CARB_LIMIT = { rest: 250, active: 330 }; // 61kg・高活動量での維持ライン。血糖対策は量でなく質とタイミングで
-const DATA_KEY = "mealog:data";
-const API_KEY_KEY = "mealog:apikey";
-const GH_TOKEN_KEY = "mealog:ghtoken";
-const GIST_ID_KEY = "mealog:gistid";
-const LAST_SYNC_KEY = "mealog:lastsync";
-const GIST_FILE = "foodlog-data.json";
+const CARB_LIMIT = { rest: 250, active: 330 }; // 本体由来の目安値（liteではshowGauges=false時は非表示のまま温存）
+// 保存キーは本体(mealog:)と分離：GitHub Pagesは同一オリジンにつきlocalStorageを共有するため、
+// 本体foodlogと同じ端末で開いてもデータが混ざらないようにする
+const DATA_KEY = "mealoglite:data";
+const API_KEY_KEY = "mealoglite:apikey";
+const GH_TOKEN_KEY = "mealoglite:ghtoken";
+const GIST_ID_KEY = "mealoglite:gistid";
+const LAST_SYNC_KEY = "mealoglite:lastsync";
+const GIST_FILE = "foodlog-lite-data.json";
 // 用途別モデル（コストと質のバランス。変えたい時はここを編集）
 const MODEL_ESTIMATE = "claude-haiku-4-5-20251001"; // テキスト概算：軽量・高速・低コスト
 const MODEL_PHOTO    = "claude-sonnet-4-6";          // 写真解析：認識精度重視
-const MODEL_BAKAO    = "claude-sonnet-4-6";          // ばかお評価：文章の質重視
 const MODEL_TEST     = MODEL_ESTIMATE;               // キー保存時のテスト用（最安）
 
 const DAY_LABEL = { rest: "休養", trainA: "筋トレA", trainB: "筋トレB", climb: "登攀", jiujitsu: "柔術", mountain: "山行", aerobic: "有酸素" };
@@ -89,49 +106,62 @@ const PACE = [
   { key: "liver", label: "鶏レバー",     target: 1, max: 2, color: "#C98C5F" },
 ];
 
-const SEED = {
-  "2026-06-30": { dayType: "rest", sleep: null, walked: false, weight: null, comment: null, foods: [
-    { name: "バナナ", p: 1, c: 27 }, { name: "ゆで卵", p: 6, c: 0 },
-    { name: "プロテイン+クレアチン+牛乳", p: 27, c: 8 },
-    { name: "鯖缶（そうめん）", p: 20, c: 0, omega3: true, cat: "saba" },
-    { name: "そうめん", p: 5, c: 40 },
-    { name: "プチトマト・オクラ", p: 2, c: 6, veg: true, fiber: true },
-    { name: "かぼちゃ蒸し", p: 2, c: 15, veg: true, fiber: true },
-    { name: "ゆで卵", p: 6, c: 0 }, { name: "かりんとう", p: 1, c: 15 },
-    { name: "赤身ステーキ400g", p: 90, c: 0, cat: "red" },
-    { name: "付け合わせ（人参・玉ねぎ・ポテト）", p: 5, c: 33, veg: true },
-    { name: "ご飯1膳", p: 4, c: 55 },
-  ] },
-  "2026-07-01": { dayType: "rest", sleep: null, walked: false, weight: null, comment: null, foods: [
-    { name: "バナナ", p: 1, c: 27 },
-    { name: "玄米", p: 4, c: 50, fiber: true },
-    { name: "鯖缶（ボウル）", p: 20, c: 0, omega3: true, cat: "saba" },
-    { name: "オクラ・トマト・しそ", p: 2, c: 6, veg: true, fiber: true },
-    { name: "かぼちゃ", p: 2, c: 15, veg: true, fiber: true },
-    { name: "炒り卵（卵2個）", p: 12, c: 1 },
-    { name: "プロテイン+クレアチン+牛乳", p: 23, c: 8 },
-    { name: "焼肉（タン・カルビ・ロース・ハラミ）", p: 40, c: 2, cat: "red" },
-    { name: "プルコギ", p: 10, c: 8 },
-    { name: "ナムル・キムチ・海苔・サンチュ", p: 5, c: 8, veg: true, fiber: true },
-    { name: "スープ", p: 2, c: 3 }, { name: "ポップコーン", p: 3, c: 18 },
-  ] },
-  "2026-07-02": { dayType: "climb", sleep: null, walked: false, weight: null, comment: null, foods: [
-    { name: "バナナ", p: 1, c: 27 },
-    { name: "鯖缶（うどん）", p: 20, c: 0, omega3: true, cat: "saba" },
-    { name: "うどん", p: 6, c: 50 },
-    { name: "みょうが・しそ・トマト・オクラ", p: 2, c: 6, veg: true, fiber: true },
-    { name: "かぼちゃ小鉢", p: 2, c: 15, veg: true, fiber: true },
-    { name: "プロテイン+クレアチン+牛乳", p: 23, c: 8 },
-    { name: "小魚アーモンド+ミックスナッツ20g", p: 4, c: 4, fiber: true },
-    { name: "チョコひとかけ", p: 0, c: 5 }, { name: "プラム2個", p: 1, c: 15 },
-    { name: "牛丼アタマ大盛り（松屋）", p: 24, c: 90, cat: "red" },
-    { name: "生卵", p: 6, c: 0 },
-    { name: "味噌汁（わかめ・油揚げ）", p: 2, c: 4, fiber: true },
-  ] },
-  "2026-07-03": { dayType: "rest", sleep: null, walked: false, weight: null, comment: null, foods: [
-    { name: "白桃アールグレイタルト（スタバ）", p: 3, c: 33 },
-  ] },
-};
+// lite: SEEDは空（知人の初期状態はまっさら）。スキーマ・移行コードは本体と互換
+const SEED = {};
+
+// ---------- lite: 純関数（test.jsがpure:begin〜pure:endを抽出してnodeで検証する。ブロック内は自己完結に保つ） ----------
+// pure:begin
+// 日付キー("YYYY-MM-DD")にn日を加算したキーを返す
+function addDaysKey(key, n) {
+  const [y, m, d] = key.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + n);
+  const p2 = (v) => String(v).padStart(2, "0");
+  return `${dt.getFullYear()}-${p2(dt.getMonth() + 1)}-${p2(dt.getDate())}`;
+}
+// タイムライン座標：横棒は5:00〜25:00（=翌1:00）。0:00〜4:59は深夜側(+24h)として扱う。
+// 戻り値は0〜1の位置（範囲外は端にクランプ）。時刻なし・不正な時刻はnull（「⏱なし」枠へ）
+function timelinePos(t) {
+  if (typeof t !== "string") return null;
+  const m = t.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return null;
+  let h = Number(m[1]) + Number(m[2]) / 60;
+  if (h < 5) h += 24; // 0:00〜4:59 → 24:00〜28:59
+  return Math.min(Math.max((h - 5) / 20, 0), 1);
+}
+// フェーズ判定：初記録日(firstKey)を1日目として、phase2StartDay日目以降がフェーズ2（内容褒め解禁）。
+// phase2Manualがtrue/falseならそちらを優先。記録がまだない場合はフェーズ1
+function litePhase(firstKey, todayKey, cfg) {
+  if (cfg.phase2Manual === true) return 2;
+  if (cfg.phase2Manual === false) return 1;
+  if (!firstKey || todayKey < firstKey) return 1;
+  let dayNo = 1, k = firstKey;
+  while (k < todayKey) { k = addDaysKey(k, 1); dayNo++; }
+  return dayNo >= cfg.phase2StartDay ? 2 : 1;
+}
+// ストリーク：recordedKeys=1件以上記録がある日付キーの配列。
+// current=今日から遡った連続日数（今日が未記録なら昨日から遡る＝その日のうちは途切れ扱いにしない）。
+// best=全期間の最長連続。current===0が「途切れた」状態（表示は「また今日から」。責めない）
+function streakInfo(recordedKeys, todayKey) {
+  const set = new Set(recordedKeys);
+  let current = 0;
+  let k = set.has(todayKey) ? todayKey : addDaysKey(todayKey, -1);
+  while (set.has(k)) { current++; k = addDaysKey(k, -1); }
+  let best = current, run = 0, prev = null;
+  for (const key of [...set].sort()) {
+    run = (prev !== null && addDaysKey(prev, 1) === key) ? run + 1 : 1;
+    if (run > best) best = run;
+    prev = key;
+  }
+  return { current, best };
+}
+// 節目：連続または累計の記録日数が3/7/14/30に達していればその情報を返す（締めコメントで一言祝う用）
+function milestoneFor(current, total) {
+  const MS = [3, 7, 14, 30];
+  if (MS.includes(current)) return { type: "連続", days: current };
+  if (MS.includes(total)) return { type: "累計", days: total };
+  return null;
+}
+// pure:end
 
 // ---------- 状態 ----------
 let data = {};
@@ -141,6 +171,7 @@ let range = 14;
 let busy = false, commentBusy = false;
 let errMsg = "", setMsg = "";
 let inputText = "";
+let tlSel = null;        // lite: タイムラインで選択中の品目index（ポップ表示用）。日付移動でリセット
 
 // ---------- ユーティリティ ----------
 const $ = (sel) => document.querySelector(sel);
@@ -151,6 +182,8 @@ const emptyDay = () => ({ foods: [], acts: [], sleep: null, weight: null, commen
 const sumP = (dd) => (dd && dd.foods || []).reduce((s, f) => s + (Number(f.p) || 0), 0);
 const sumC = (dd) => (dd && dd.foods || []).reduce((s, f) => s + (Number(f.c) || 0), 0);
 const getDay = (k) => data[k] || emptyDay();
+// lite: 1件以上記録がある日付キーの昇順配列（ストリーク・フェーズ判定・初記録日の算出に使う）
+const recordedKeys = () => Object.keys(data).filter((k) => (((data[k] || {}).foods) || []).length > 0).sort();
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
 
 function load() {
@@ -378,66 +411,35 @@ ${hint ? "補足メモ：" + hint + "\n" : ""}${NUTRITION_RULES}` },
   return parseItems(raw);
 }
 
-async function fetchBakao(key) {
+// lite: 締めコメント（人格を全面差し替え）。記録という行為を必ず認める応援係。
+// フェーズ1（解禁前）は内容への言及を全面禁止するため、プロンプトに品目リスト自体を渡さない。
+async function fetchCheer(key, closing) {
   const day = getDay(key);
-  const total = sumP(day), carbs = sumC(day);
-  const active = isActiveDay(day);
-  const target = active ? CEILING : FLOOR;
-  const hasVeg = day.foods.some((f) => f.veg);
-  const hasOmega3 = day.foods.some((f) => f.omega3);
-  const foodList = day.foods.map((f) => `${f.t ? f.t + " " : ""}${f.name}(P${f.p}${f.c != null ? "/C" + f.c : ""})`).join("、");
+  const rk = recordedKeys();
+  const phase = litePhase(rk[0] || key, key, LITE_CONFIG);
+  const st = streakInfo(rk, key);
+  const total = rk.length;
+  const ms = milestoneFor(st.current, total);
   const [y, m, d] = key.split("-").map(Number);
   const dateLabel = fmtJP(new Date(y, m - 1, d));
-  const isToday = toKey(new Date()) === key;
-  const now = new Date(), hh = now.getHours(), mm = pad(now.getMinutes());
-  const phase = !isToday ? "past"
-    : (hh >= 3 && hh < 12) ? "morning"
-    : (hh >= 12 && hh < 18) ? "midday"
-    : (hh >= 18 && hh < 24) ? "evening" : "closing";
-  const phaseNote = {
-    past: "これは過去の日の振り返りです。締めの総括として評価してください。",
-    morning: "まだ一日の序盤（この人は起床9:30）。締めの総括は絶対にしないこと。ここまでの立ち上がりを評価し、残りの食事でどう届くかの見通しを軽く示す。",
-    midday: "まだ一日の中盤。締めの総括は絶対にしないこと。「今日はここまで」等の締め言葉も禁止。進捗として評価し、夜（この人の夕食は遅め）で目標に届く道筋を一言添える。",
-    evening: "一日の終盤だが、この人は夜型（練習20〜23時、夕食も遅い）でまだ食事が残っている可能性が高い。締めすぎず、残りの補給の余地に触れてよい。",
-    closing: "就寝（2:30）前の時間帯。今日の締めの総括として評価してよい。",
-  }[phase];
-  const pc = pace7(key);
+  const foodList = day.foods.map((f) => `${f.t ? f.t + " " : ""}${f.name}`).join("、");
   const raw = await callApi({
-    model: MODEL_BAKAO, max_tokens: 500,
+    model: LITE_CONFIG.commentModel, max_tokens: 300,
     messages: [{ role: "user", content:
-`あなたは「塔ノ岳 ばかお」という栄養担当のコーチです。48歳男性クライマー・登山者（170cm/61kg、維持目標、TFCC損傷回復期、血糖やや高め・HbA1c5.9、起床9:30・就寝2:30の夜型）の食事ログに、一言評価を返します。
+`あなたは記録を応援する係。食事記録アプリのユーザーの「今日の締め」に一言コメントを返します。以下を厳守。
+- 記録という行為は内容にかかわらず必ず認める（固定給）
+${phase === 2
+  ? "- 良い選択（たんぱく質源／主食+主菜が揃った食事／無糖の飲み物）を見つけたら、その一品だけを理由付きで短く褒める（ボーナス）。1回の返答で褒めは最大2つ"
+  : "- 食べたものの内容への言及は全面禁止。記録という行為だけを具体的に認める（記録の件数や続いた日数に触れるのは可）"}
+- 禁止：悪い選択への言及、比較（昨日より等）、改善提案、数値の言及、健康リスクの話、説教
+${ms ? `- 今日は節目（${ms.type}${ms.days}日目）。それを一言祝う\n` : ""}- 全体トーン：短く、あたたかく、淡々と。絵文字は控えめに1つまで
 
-評価の姿勢（厳守）：
-- 事実を淡々と。達成率が低い日に「満点」「完璧」と言わない
-- ダメ出しもしない
-- 完璧主義による息切れが最大リスクの人なので、圧をかけない
-- 良い点をひとつ具体的に挙げる。提案はあっても軽く一つまで
-
-現在時刻：${hh}:${mm}
-時間帯の扱い（最重要）：${phaseNote}
-
-目標：たんぱく質は基準100g（毎日必達）、運動日は120gを目標にする（120gは上限ではなく、超えても全く問題ない）。糖質の目安は休養日250g前後、運動日330g前後（維持目標・高活動量のため十分に摂る方針。血糖対策は玄米優先・食後散歩・ドカ食い回避で行い、総量を過度に絞らない）。
-
-筋トレ設計：週2（A=ヒンジ・脚／B=引く・押す・体幹）。筋トレ日は目標120gを狙い、トレ60分前に補食+コラーゲン+C、トレ後60分に回復食。翌朝の手首に違和感が出たら一段戻すルール。
-
-運動日/休養日の判定は「実績ベース」：その日に筋トレのチェック・登攀・柔術・山行の実績があれば運動日。宣言でなく実績で決まる。
-
-対象日（${dateLabel}・${actLabel(day)}${active ? "＝運動日" : "＝休養日"}）のデータ：
-- たんぱく質：${total}g（目標${target}g）
-- 糖質：${carbs}g
-- 歩数：${day.steps != null ? day.steps.toLocaleString() + "歩（参考値。目標や警告には使わない。ただし休養日で15,000歩を超えている日は、糖質+40〜50g程度の追加補給に軽く触れてよい。責めない・警告調にしない）" : "記録なし"}
-- サプリ：クレアチン${creatineOn(day) ? "済" : "未"}／ビタミンD${vitdOn(day) ? "済" : "未"}（クレアチン3〜5gは毎日方針。未の日はごく軽く一言リマインドしてよい。説教はしない）
-- 有酸素（Zone2）：本日${dayActs(day).includes("aerobic") ? "実施" : "なし"}／今週${weeklyAerobic(key)}回（目安1〜2回。糖質目標には影響しない。未実施を責めない。実施日は一言認めてよい）
-- 睡眠：${day.sleep != null ? day.sleep + "時間（目標7時間）" : "記録なし"}${(day.bedtime || day.waketime) ? `／就寝${day.bedtime ?? "—"}・起床${day.waketime ?? "—"}（目標2:30就寝・9:30起床。ズレはセットで崩れるので就寝側を主因として見る）` : ""}${day.rhr != null ? `／安静時心拍${day.rhr}bpm（平常より明らかに高い朝は回復不足のサイン）` : ""}${day.mood ? `／本人の体調メモ：「${day.mood}」（数字と体感の対応を一言で拾う）` : ""}
-- 緑黄色野菜：${hasVeg ? "あり" : "なし"}／オメガ3の魚：${hasOmega3 ? "あり" : "なし"}
-- 運動実績：${actLabel(day)}${dayActs(day).filter((a)=>MENU[a]).map((a)=>`／${DAY_LABEL[a]}種目：${(((day.workout||{}).checks)||[]).filter((id)=>MENU[a].some((ex)=>ex.id===id)).length}/${MENU[a].length}`).join("")}${(day.workout&&day.workout.note)?`（メモ：${day.workout.note}）`:""}
-${(day.muscle != null || day.fatpct != null) ? `- 体組成：体重${fmt1(day.weight) || "—"}kg／骨格筋量${day.muscle ?? "—"}kg／体脂肪率${day.fatpct ?? "—"}%（維持目標。骨格筋量の減少傾向にだけ注意を払う）
-` : ""}${day.wrist ? `- 翌朝の手首：${day.wrist==="ok"?"違和感なし":"違和感あり"}
-` : ""}- 食べたもの（時刻付き。血糖対策は総量でなく質とタイミング：時刻の偏り＝1食への糖質集中や、就寝2:30直前の重い食事があれば軽く触れてよい。時刻なしの品目は詮索しない）：${foodList}
-- 直近7日平均：${weekAvgFor(new Date(y, m - 1, d)) ?? "—"}g
-- 今週の食材ペース（月曜始まり・日曜締め、本日${weekInfo(key).dayN}日目）：鯖缶${pc.saba}/3、生魚${pc.fish}/1、ツナ${pc.tuna}/2、赤身${pc.red}/1、貝${pc.shell}/1、鶏レバー${pc.liver}/1〜2（レバーはビタミンA過剰回避のため週2が上限。週3以上のときだけ「今週はもう十分」と一言添える）（週前半の未達を責めない。週後半で残りが多い場合のみ軽く献立提案してよい）
-
-出力：日本語で2〜3文の一言評価のみ。前置き・見出し・絵文字・マークダウン不要。`} ],
+状況：
+- 対象日：${dateLabel}${closing ? "（本人が「今日はここまで」ボタンで一日を締めた）" : ""}
+- この日の記録：${day.foods.length}件
+- 連続記録：${st.current}日目／累計${total}日
+${phase === 2 ? `- 記録された品目（時刻付き）：${foodList || "（なし）"}\n` : ""}
+出力：日本語で1〜3文のコメントのみ。前置き・見出し・マークダウン不要。`}],
   });
   return raw.trim();
 }
@@ -661,15 +663,17 @@ async function onPhotoPicked(file) {
   finally { busy = false; render(); }
 }
 
-async function getBakao() {
+// lite: 「今日はここまで」＝日次の締め。祝いの一言を取得して表示し、day.closed=trueを記録。
+// 締めた後の追加記録も普通に可能（記録追加でコメントはクリアされるが、締め直しでまた取得できる）
+async function closeDay() {
   const key = toKey(cursor);
   if (commentBusy || !getDay(key).foods.length) return;
-  if (!apiKey()) { errMsg = "APIキーが未登録です。設定タブで登録すると評価が使えます。"; render(); return; }
+  if (!apiKey()) { errMsg = "APIキーが未登録です。設定タブで登録すると締めの一言が届きます。"; render(); return; }
   commentBusy = true; errMsg = ""; render();
   try {
-    const c = await fetchBakao(key);
-    if (c) updateDay(key, { comment: c });
-  } catch (e) { errMsg = "評価の取得に失敗しました。"; }
+    const c = await fetchCheer(key, true);
+    updateDay(key, { comment: c || null, closed: true });
+  } catch (e) { errMsg = "コメントの取得に失敗しました。通信とAPIキーを確認して、もう一度どうぞ。"; }
   finally { commentBusy = false; render(); }
 }
 
@@ -706,7 +710,21 @@ async function onInbodyPicked(file) {
 function removeFood(i) {
   const key = toKey(cursor);
   const day = getDay(key);
+  tlSel = null; // 削除でindexがずれるためタイムラインの選択は解除
   updateDay(key, { foods: day.foods.filter((_, idx) => idx !== i), comment: null });
+}
+
+// 品目の時刻編集（食事リストの時刻チップと、タイムラインのポップから共用）
+function editFoodTime(i) {
+  const key = toKey(cursor);
+  const day = getDay(key);
+  const cur = (day.foods[i] && day.foods[i].t) || "";
+  const v = prompt("食べた時刻（例 21:30）。空欄で時刻なしに戻します。", cur);
+  if (v === null) return; // キャンセル
+  const t = v.trim() === "" ? null : validHHMM(v);
+  if (v.trim() !== "" && !t) { alert("HH:MM形式で入力してください（例 8:05、21:30）"); return; }
+  const foods = day.foods.map((f, idx) => idx === i ? Object.assign({}, f, { t }) : f);
+  updateDay(key, { foods });
 }
 
 // ---------- 描画 ----------
@@ -739,24 +757,83 @@ function applyFillAnim() {
 function render() {
   const app = $("#app");
   const wide = isWide();
+  // lite: 振り返りタブは数値・評価の塊なので、数値表示フラグに連動して丸ごと非表示
+  const showReview = LITE_CONFIG.showNutrientNumbers;
+  if (!showReview && view === "review") view = "log";
   let body;
   if (view === "settings") {
     body = `<div class="${wide ? "wide-single" : ""}">${renderSettings()}</div>`;
-  } else if (wide) {
+  } else if (wide && showReview) {
     // 大画面：記録（左）+ 振り返り（右）を同時表示
     body = `<div class="wide-grid"><div class="wcol">${renderLog()}</div><div class="wcol sub">${renderReview()}</div></div>`;
+  } else if (wide) {
+    body = `<div class="wide-single">${renderLog()}</div>`;
   } else {
     body = view === "log" ? renderLog() : renderReview();
   }
+  const tabDefs = wide
+    ? [["log", showReview ? "記録・振り返り" : "記録"], ["settings", "設定"]]
+    : showReview
+      ? [["log", "記録"], ["review", "振り返り"], ["settings", "設定"]]
+      : [["log", "記録"], ["settings", "設定"]];
   app.innerHTML = `
     <div class="tabs">
-      ${(wide ? [["log","記録・振り返り"],["settings","設定"]] : [["log","記録"],["review","振り返り"],["settings","設定"]]).map(([v,l]) =>
+      ${tabDefs.map(([v,l]) =>
         `<button class="tab ${view===v || (wide && v==="log" && view==="review") ?"on":""}" data-view="${v}">${l}</button>`).join("")}
     </div>
     ${body}
   `;
   bindEvents();
   applyFillAnim();
+}
+
+// lite: この日のタイムライン（記録タブの主役UI）。横棒=5:00〜25:00、記録の時刻位置に●（単色・評価なし）。
+// 時刻なしの記録は棒の右端外の「⏱なし」枠にまとめる。●・チップのタップで品名をポップ表示（時刻編集は既存流用）
+function renderTimeline(day, isToday) {
+  const withT = [], noT = [];
+  day.foods.forEach((f, i) => {
+    const pos = timelinePos(f.t);
+    if (pos == null) noT.push({ f, i }); else withT.push({ f, i, pos });
+  });
+  const sel = (tlSel != null && day.foods[tlSel]) ? day.foods[tlSel] : null;
+  return `
+    <div class="section" style="padding-top:0">
+      <div class="seclabel">${isToday ? "今日" : "この日"}のタイムライン</div>
+      <div class="card tlcard">
+        <div class="tlrow">
+          <div class="tlbar">
+            ${[5, 9, 13, 17, 21, 25].map((h) =>
+              `<span class="tltick" style="left:${((h - 5) / 20 * 100).toFixed(1)}%"><i></i>${h <= 24 ? h : h - 24}時</span>`).join("")}
+            ${withT.map(({ f, i, pos }) =>
+              `<button class="tldot ${tlSel === i ? "sel" : ""}" data-tldot="${i}" aria-label="${esc(f.name)}" style="left:${(pos * 100).toFixed(1)}%"></button>`).join("")}
+          </div>
+          ${noT.length ? `<div class="tlnonebox">⏱なし${noT.map(({ f, i }) =>
+            `<button class="tlnonechip ${tlSel === i ? "sel" : ""}" data-tldot="${i}">${esc(f.name.length > 6 ? f.name.slice(0, 6) + "…" : f.name)}</button>`).join("")}</div>` : ""}
+        </div>
+        ${day.foods.length === 0 ? `<div class="tlempty">記録するとここに●が並びます</div>` : ""}
+        ${sel ? `<div class="tlpop"><span class="mono" style="color:var(--muted)">${sel.t ? esc(sel.t) : "⏱なし"}</span> ${esc(sel.name)} <button class="linkbtn" data-tledit="${tlSel}" style="margin:0 0 0 8px">時刻を編集</button></div>` : ""}
+      </div>
+    </div>`;
+}
+
+// lite: 達成系（罰感ゼロ仕様）。記録数は事実のみ・ストリークは途切れても「また今日から」（赤・警告表現は禁止）
+function renderAchievement(day, isToday) {
+  const rk = recordedKeys();
+  const st = streakInfo(rk, toKey(new Date()));
+  const n = day.foods.length;
+  const nLabel = n > 0
+    ? `${isToday ? "今日" : "この日"} ${n}件 記録できました`
+    : `${isToday ? "今日" : "この日"}の記録はまだありません`;
+  const stLabel = st.current > 0
+    ? `連続記録 ${st.current}日目 <span class="stbest">（過去最長 ${st.best}日）</span>`
+    : rk.length
+      ? `また今日から <span class="stbest">（過去最長 ${st.best}日）</span>`
+      : `記録をはじめると、続いた日数がここに出ます`;
+  return `
+    <div class="card litecard">
+      <div class="litecount">${nLabel}</div>
+      <div class="litestreak">${stLabel}</div>
+    </div>`;
 }
 
 function renderLog() {
@@ -796,13 +873,17 @@ function renderLog() {
       <button class="navbtn" data-move="1" ${isToday ? "disabled" : ""}>›</button>
     </div>
 
+    ${renderTimeline(day, isToday)}
+    ${renderAchievement(day, isToday)}
+
+    ${!LITE_CONFIG.showActs ? "" : `
     <div class="daytype daytype6">
       ${ACTS.map((t) =>
         `<button class="dt ${t==="aerobic"?"aero":"active"} ${day.acts.includes(t)?"on":""}" data-act="${t}">${DAY_LABEL[t]}</button>`).join("")}
     </div>
-    <div class="hint" style="margin-top:-8px;margin-bottom:8px">実績判定：<b style="color:${active?"var(--amber)":"var(--green)"}">${active?"運動日 · 目標120g／糖質330g":"休養日 · 基準100g／糖質250g"}</b>${day.acts.some((a)=>a==="trainA"||a==="trainB") && !active ? "（筋トレは1種目チェックで運動日になります）" : ""}<br>今週の有酸素 <b class="mono">${weeklyAerobic(key)}</b>/1〜2${day.acts.includes("aerobic") ? "（有酸素は糖質目標に影響しません）" : ""}</div>
+    <div class="hint" style="margin-top:-8px;margin-bottom:8px">実績判定：<b style="color:${active?"var(--amber)":"var(--green)"}">${active?"運動日 · 目標120g／糖質330g":"休養日 · 基準100g／糖質250g"}</b>${day.acts.some((a)=>a==="trainA"||a==="trainB") && !active ? "（筋トレは1種目チェックで運動日になります）" : ""}<br>今週の有酸素 <b class="mono">${weeklyAerobic(key)}</b>/1〜2${day.acts.includes("aerobic") ? "（有酸素は糖質目標に影響しません）" : ""}</div>`}
 
-    ${dayActs(day).filter((a) => MENU[a]).map((a) => `
+    ${!LITE_CONFIG.showActs ? "" : dayActs(day).filter((a) => MENU[a]).map((a) => `
     <div class="section" style="padding-top:0;padding-bottom:14px">
       <div class="seclabel">今日のメニュー（${DAY_LABEL[a]}）</div>
       <div class="card pacebox">
@@ -816,13 +897,14 @@ function renderLog() {
         }).join("")}
       </div>
     </div>`).join("")}
-    ${dayActs(day).some((a) => MENU[a]) ? `
+    ${LITE_CONFIG.showActs && dayActs(day).some((a) => MENU[a]) ? `
     <div class="section" style="padding-top:0;padding-bottom:14px;margin-top:-8px">
       <input class="setinput" data-wnote placeholder="メモ（例：RDL 18kgに上げた／スイング違和感で中止）"
         value="${esc((day.workout && day.workout.note) || "")}" style="font-size:13px">
     </div>` : ""}
 
     ${(() => {
+      if (!LITE_CONFIG.showWrist) return "";
       const yd = new Date(cursor); yd.setDate(yd.getDate() - 1);
       const ydd = data[toKey(yd)];
       if (!ydd || !wristTrig(ydd)) return "";
@@ -839,6 +921,7 @@ function renderLog() {
       </div>`;
     })()}
 
+    ${!LITE_CONFIG.showGauges ? "" : `
     <div class="gaugewrap">
       <div class="gauge">
         <div class="tube"><div class="fill" style="height:${pct}%;background:${barColor}"></div></div>
@@ -881,8 +964,9 @@ function renderLog() {
       <div class="pill ${hasVeg?"on":""}"><span class="ico">🥬</span>緑黄色野菜</div>
       <div class="pill ${hasOm?"on":""}"><span class="ico">🐟</span>魚 オメガ3</div>
       <div class="pill ${hasFi?"on":""}"><span class="ico">🌾</span>食物繊維</div>
-    </div>
+    </div>`}
 
+    ${!LITE_CONFIG.showPaceTable ? "" : `
     <div class="section">
       <div class="seclabel">今週の食材ペース（月〜日・${wd}曜＝${wi.dayN}日目）</div>
       <div class="card pacebox">
@@ -903,14 +987,14 @@ function renderLog() {
         }).join("")}
       </div>
       <div class="pacenote">目安：鯖缶3・生魚1〜2・ツナ2〜3・赤身1・貝1・鶏レバー1〜2（50〜80g/回、上限あり）／週。月曜に0から再スタート、日曜が締め${wi.remain > 0 ? `（今週あと${wi.remain}日）` : "（今日が最終日）"}</div>
-    </div>
+    </div>`}
 
     <div class="inputrow">
       <button class="iconbtn" data-photo ${busy?"disabled":""}>📷</button>
-      <textarea class="mealinput" rows="2" placeholder="食べたものを書く／写真だけでもOK" ${busy?"disabled":""}>${esc(inputText)}</textarea>
+      <textarea class="mealinput" rows="2" placeholder="飲み物・あめ・つまみ食いも、なんでも1枚 or 一言で" ${busy?"disabled":""}>${esc(inputText)}</textarea>
       <button class="sendbtn" data-send ${busy?"disabled":""}>${busy?'<span class="spin">◐</span>':"⏎"}</button>
     </div>
-    <div class="hint">${busy ? "解析中…" : apiKey() ? "AIが自動概算します。g数を書けばその値を優先。" : "AI概算には設定タブでAPIキー登録が必要です。"}</div>
+    <div class="hint">${busy ? "読み取り中…" : apiKey() ? (LITE_CONFIG.showNutrientNumbers ? "AIが自動概算します。g数を書けばその値を優先。" : "AIが品名と時刻を読み取って記録します。") : "AI読み取りには設定タブでAPIキー登録が必要です。"}</div>
     ${errMsg ? `<div class="errmsg">${esc(errMsg)}</div>` : ""}
 
     <div class="foodlist">
@@ -919,10 +1003,11 @@ function renderLog() {
         : day.foods.map((f, i) => `
           <div class="foodrow">
             <button class="timechip mono" data-ftime="${i}" title="タップで時刻を修正">${f.t ? esc(f.t) : "--:--"}</button>
-            <div class="foodname"><span class="nm">${esc(f.name)}</span><span class="badges">${f.veg?"🥬":""}${f.omega3?"🐟":""}${f.fiber?"🌾":""}</span></div>
+            <div class="foodname"><span class="nm">${esc(f.name)}</span><span class="badges">${LITE_CONFIG.showGauges ? `${f.veg?"🥬":""}${f.omega3?"🐟":""}${f.fiber?"🌾":""}` : ""}</span></div>
             <div class="foodnums">
+              ${!LITE_CONFIG.showNutrientNumbers ? "" : `
               <span class="mono" style="color:var(--ice);font-size:15px">${f.p}<small style="color:var(--muted)">P</small></span>
-              <span class="mono" style="color:var(--muted);font-size:13px">${f.c ?? 0}<small>C</small></span>
+              <span class="mono" style="color:var(--muted);font-size:13px">${f.c ?? 0}<small>C</small></span>`}
               <button class="delbtn" data-del="${i}">🗑</button>
             </div>
           </div>`).join("")}
@@ -932,14 +1017,16 @@ function renderLog() {
       <div class="bakaobox">
         ${day.comment ? `
           <div class="bakaocard">
-            <div class="bakaotitle">🥗 ばかおの一言</div>
+            <div class="bakaotitle">🌙 ${isToday ? "今日" : "この日"}の締め</div>
             <div class="bakaotext">${esc(day.comment)}</div>
-            <button class="linkbtn" data-bakao>${commentBusy?"更新中…":"評価を更新"}</button>
+            <button class="linkbtn" data-close>${commentBusy?"取得中…":"締め直す"}</button>
           </div>` : `
-          <button class="bakaobtn" data-bakao ${commentBusy?"disabled":""}>${commentBusy?'<span class="spin">◐</span> ばかおが見ています…':"💬 ばかおの一言評価をもらう"}</button>`}
+          <button class="bakaobtn" data-close ${commentBusy?"disabled":""}>${commentBusy?'<span class="spin">◐</span> 一言を用意しています…':`🌙 ${isToday ? "今日はここまで" : "この日を締める"}`}</button>`}
       </div>` : ""}
 
+    ${(LITE_CONFIG.showMeasurement || LITE_CONFIG.showSupplements) ? `
     <div class="tiles">
+      ${!LITE_CONFIG.showMeasurement ? "" : `
       <div class="tile">
         <span class="ico">🌙</span>
         <input class="tileinput mono" data-field="sleep" inputmode="decimal" placeholder="—" value="${day.sleep ?? ""}">
@@ -950,7 +1037,8 @@ function renderLog() {
         <input class="tileinput mono" data-field="weight" inputmode="decimal" placeholder="—" value="${fmt1(day.weight)}">
         <span class="tilelabel">体重 kg</span>
         ${w7 != null ? `<span class="tilelabel mono">7日平均 ${w7}</span>` : ""}
-      </div>
+      </div>`}
+      ${!LITE_CONFIG.showSupplements ? "" : `
       <button class="tile ${creatineOn(day)?"on":""}" data-supp="creatine">
         <span class="ico">💊</span>
         <span class="mono" style="font-size:15px;font-weight:900;color:${creatineOn(day)?"var(--green)":"var(--muted)"}">${creatineOn(day)?"✓":"—"}</span>
@@ -960,10 +1048,11 @@ function renderLog() {
         <span class="ico">☀️</span>
         <span class="mono" style="font-size:15px;font-weight:900;color:${vitdOn(day)?"var(--green)":"var(--muted)"}">${vitdOn(day)?"✓":"—"}</span>
         <span class="tilelabel">ビタミンD</span>
-      </button>
-    </div>
-    ${(day.creatine == null && hasCreatineFood(day)) ? `<div class="walknote">💊 食事記録の「クレアチン」から自動チェック済み。</div>` : ""}
+      </button>`}
+    </div>` : ""}
+    ${(LITE_CONFIG.showSupplements && day.creatine == null && hasCreatineFood(day)) ? `<div class="walknote">💊 食事記録の「クレアチン」から自動チェック済み。</div>` : ""}
 
+    ${!LITE_CONFIG.showMeasurement ? "" : `
     <div class="section" style="padding-bottom:8px">
       <div class="seclabel">測定データ（InBody・Fitbit等のスクショ）</div>
       <div class="card" style="margin-top:10px;padding:12px 14px;display:flex;align-items:center;gap:12px">
@@ -978,7 +1067,7 @@ function renderLog() {
       </div>
       <input class="setinput" data-mood placeholder="体調ひとこと（任意。例：すっきり／だるい）"
         value="${esc(day.mood || "")}" style="margin-top:8px;font-size:13px">
-    </div>
+    </div>`}
   `;
 }
 
@@ -1127,12 +1216,12 @@ function renderSettings() {
   return `
     <div class="section" style="padding-top:4px">
       <div class="card setbox">
-        <div class="settitle">🔑 Anthropic APIキー（AI概算・ばかお評価用）</div>
+        <div class="settitle">🔑 Anthropic APIキー（AI読み取り・締めの一言用）</div>
         <div class="setdesc">
-          写真解析・自動概算・ばかおの一言に使います。キーは<b>この端末の中にだけ</b>保存され、外部には送信されません（Anthropicへの通信を除く）。<br>
-          取得：console.anthropic.com → API Keys → Create Key。従量課金ですが1回の概算は1円未満〜数円程度です。
+          写真やテキストからの品目の読み取りと、「今日はここまで」の一言に使います。キーは<b>この端末の中にだけ</b>保存され、外部には送信されません（Anthropicへの通信を除く）。<br>
+          取得：console.anthropic.com → API Keys → Create Key。従量課金ですが1回の読み取りは1円未満〜数円程度です。
         </div>
-        <div style="font-size:12px;margin-bottom:8px;color:${hasKey?"var(--green)":"var(--amber)"}">現在：${hasKey ? "登録済み ✓" : "未登録（AI概算・写真解析・ばかお評価は使えません）"}</div>
+        <div style="font-size:12px;margin-bottom:8px;color:${hasKey?"var(--green)":"var(--amber)"}">現在：${hasKey ? "登録済み ✓" : "未登録（AI読み取り・締めの一言は使えません）"}</div>
         <input class="setinput mono" id="apikeyInput" type="password" placeholder="sk-ant-..." value="${hasKey ? "●●●●●●●●●●●●" : ""}">
         <div class="setrow">
           <button class="setbtn" data-savekey>保存してテスト</button>
@@ -1141,6 +1230,7 @@ function renderSettings() {
         ${setMsg ? `<div class="okmsg">${esc(setMsg)}</div>` : ""}
       </div>
 
+      ${!LITE_CONFIG.showGistSync ? "" : `
       <div class="card setbox">
         <div class="settitle">🔄 デバイス間同期（GitHub Gist）</div>
         <div class="setdesc">
@@ -1159,27 +1249,23 @@ function renderSettings() {
           ${ghToken() ? `<button class="setbtn ghost" data-syncnow>今すぐ同期</button><button class="setbtn danger" data-delgh>トークン削除</button>` : ""}
         </div>
         ${gistId() ? `<div style="font-size:11px;color:var(--muted);margin-top:8px;word-break:break-all">分析用Gist ID（AIに全データ分析を頼むときに伝える）：<br><span class="mono" style="color:var(--text);user-select:all">${esc(gistId())}</span></div>` : ""}
-      </div>
+      </div>`}
 
       <div class="card setbox">
-        <div class="settitle">💾 バックアップ</div>
+        <div class="settitle">💾 データの書き出し・復元</div>
         <div class="setdesc">データはこの端末のブラウザ内に保存されています。ブラウザのデータ消去で消えるので、ときどき書き出しておくと安心です。</div>
         <div class="setrow">
-          <button class="setbtn ghost" data-exportjson>JSONで書き出し</button>
-          <button class="setbtn ghost" data-importjson>JSONから復元</button>
-          <button class="setbtn ghost" data-exportcsv>CSVで書き出し</button>
+          <button class="setbtn ghost" data-exportjson>データを書き出す（振り返り用）</button>
+          <button class="setbtn ghost" data-importjson>バックアップから復元</button>
         </div>
       </div>
 
       <div class="card setbox">
         <div class="settitle">ℹ️ このアプリについて</div>
         <div class="setdesc">
-          foodlog v2 — たんぱく質 基準100g／運動日目標120g方式の食事＋筋トレログ。<br>
-          <b>v2＝実績ベース判定</b>：運動日/休養日は宣言でなく、その日の実績（筋トレ1種目以上チェック・登攀・柔術・山行）から自動判定。有酸素（Zone2）トグルは週次実績の記録のみで糖質目標には影響しない（Fitbit等のワークアウト画面スクショを📊に読ませると自動ON）。<br>
-          歩数はスクショ📊から参考表示のみ（目標・警告には使わない。休養日で15,000歩超の日だけ補給の一言が出ます）。<br>
-          筋トレ：週2（A=ヒンジ・脚／B=引く・押す・体幹）。翌朝の手首で前進/一段戻すを判定。サプリ確認：クレアチン（食事記録から自動チェック）・ビタミンD。<br>
-          糖質目安：休養日250g・運動日330g（血糖対策は質とタイミングで）。食材ペース：鯖缶3・生魚1〜2・ツナ2〜3・赤身1・貝1／週（月曜始まり・日曜締めの固定週）。<br>
-          データ保存：この端末＋（同期設定時）あなたのGitHub秘密Gist。Anthropic・GitHub以外の外部には何も送信しません。
+          foodlog-lite — 記録するだけのアプリです。評価も採点もしません。<br>
+          食べたもの・飲んだものを、写真か一言で記録します。記録はタイムラインに●で並びます。<br>
+          データはこのスマホの中だけに保存されます（AI読み取り時のAnthropicへの通信を除き、外部には何も送信しません）。
         </div>
       </div>
     </div>
@@ -1189,11 +1275,20 @@ function renderSettings() {
 // ---------- イベント ----------
 function bindEvents() {
   document.querySelectorAll(".tab").forEach((b) =>
-    b.addEventListener("click", () => { view = b.dataset.view; errMsg = ""; setMsg = ""; render(); }));
+    b.addEventListener("click", () => { view = b.dataset.view; errMsg = ""; setMsg = ""; tlSel = null; render(); }));
 
   document.querySelectorAll("[data-move]").forEach((b) =>
-    b.addEventListener("click", () => { const d = new Date(cursor); d.setDate(d.getDate() + Number(b.dataset.move)); cursor = d; errMsg = ""; render(); }));
-  const tb = $("[data-today]"); if (tb) tb.addEventListener("click", () => { cursor = new Date(); render(); });
+    b.addEventListener("click", () => { const d = new Date(cursor); d.setDate(d.getDate() + Number(b.dataset.move)); cursor = d; errMsg = ""; tlSel = null; render(); }));
+  const tb = $("[data-today]"); if (tb) tb.addEventListener("click", () => { cursor = new Date(); tlSel = null; render(); });
+
+  // lite: タイムラインの●／⏱なしチップ → 品名ポップの表示切替。ポップ内の「時刻を編集」は既存の時刻編集を流用
+  document.querySelectorAll("[data-tldot]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const i = Number(b.dataset.tldot);
+      tlSel = tlSel === i ? null : i;
+      render();
+    }));
+  const te = $("[data-tledit]"); if (te) te.addEventListener("click", () => editFoodTime(Number(te.dataset.tledit)));
 
   document.querySelectorAll("[data-act]").forEach((b) =>
     b.addEventListener("click", () => {
@@ -1218,20 +1313,9 @@ function bindEvents() {
     b.addEventListener("click", () => removeFood(Number(b.dataset.del))));
 
   document.querySelectorAll("[data-ftime]").forEach((b) =>
-    b.addEventListener("click", () => {
-      const i = Number(b.dataset.ftime);
-      const key = toKey(cursor);
-      const day = getDay(key);
-      const cur = (day.foods[i] && day.foods[i].t) || "";
-      const v = prompt("食べた時刻（例 21:30）。空欄で時刻なしに戻します。", cur);
-      if (v === null) return; // キャンセル
-      const t = v.trim() === "" ? null : validHHMM(v);
-      if (v.trim() !== "" && !t) { alert("HH:MM形式で入力してください（例 8:05、21:30）"); return; }
-      const foods = day.foods.map((f, idx) => idx === i ? Object.assign({}, f, { t }) : f);
-      updateDay(key, { foods });
-    }));
+    b.addEventListener("click", () => editFoodTime(Number(b.dataset.ftime))));
 
-  const bk = $("[data-bakao]"); if (bk) bk.addEventListener("click", getBakao);
+  const cb = $("[data-close]"); if (cb) cb.addEventListener("click", closeDay);
 
   document.querySelectorAll("[data-field]").forEach((inp) =>
     inp.addEventListener("change", () => {

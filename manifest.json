@@ -1,7 +1,7 @@
 {
-  "name": "foodlog",
-  "short_name": "foodlog",
-  "description": "たんぱく質 基準100g/運動日目標120g方式の食事ログ",
+  "name": "foodlog-lite",
+  "short_name": "foodlog-lite",
+  "description": "記録するだけの食事ログ。評価も採点もしません",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#0E141A",
